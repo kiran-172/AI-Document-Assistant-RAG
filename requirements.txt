@@ -1,0 +1,20 @@
+
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+
+# Document processing
+pypdf
+python-docx
+
+# Database
+sqlalchemy
+psycopg[binary]
+pgvector
+
+# Google Gemini and RAG
+google-genai
+langchain
+langchain-google-genai
+langchain-text-splitters
