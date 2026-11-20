@@ -1,33 +1,51 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from backend.database import SessionLocal
 from backend.rag_pipeline import generate_answer
+from backend.auth import get_current_user
 
 router = APIRouter(
     prefix="/documents",
     tags=["Document Questions"]
 )
 
+
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     top_k: int = Field(default=3, ge=1, le=10)
     document_id: str | None = None
 
-# 1. Ask questions about documents
-@router.post("/ask")
-def ask_question(request: QuestionRequest):
 
+# 1. Ask questions about the logged-in user's documents
+@router.post("/ask")
+def ask_question(
+    request: QuestionRequest,
+    current_user: dict = Depends(get_current_user)
+):
     try:
+        if request.document_id:
+            try:
+                UUID(request.document_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid document ID."
+                )
+
         return generate_answer(
             question=request.question,
             top_k=request.top_k,
-            document_id=request.document_id
+            document_id=request.document_id,
+            user_id=str(current_user["id"])
         )
+
+    except HTTPException:
+        raise
 
     except ValueError as error:
         raise HTTPException(
@@ -43,10 +61,12 @@ def ask_question(request: QuestionRequest):
             detail="Unable to generate an answer. Please try again."
         )
 
-# 2. Get all uploaded documents
-@router.get("/list")
-def list_documents():
 
+# 2. Get only the logged-in user's documents
+@router.get("/list")
+def list_documents(
+    current_user: dict = Depends(get_current_user)
+):
     db = SessionLocal()
 
     try:
@@ -61,13 +81,15 @@ def list_documents():
                 FROM documents d
                 LEFT JOIN document_chunks c
                     ON d.id = c.document_id
+                WHERE d.user_id = CAST(:user_id AS UUID)
                 GROUP BY
                     d.id,
                     d.filename,
                     d.status,
                     d.created_at
                 ORDER BY d.created_at DESC
-            """)
+            """),
+            {"user_id": str(current_user["id"])}
         )
 
         documents = []
@@ -97,14 +119,16 @@ def list_documents():
     finally:
         db.close()
 
-# 3. Get individual document details
-@router.get("/details/{document_id}")
-def get_document_details(document_id: str):
 
+# 3. Get details only for the logged-in user's document
+@router.get("/details/{document_id}")
+def get_document_details(
+    document_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     db = SessionLocal()
 
     try:
-        # Validate document ID
         try:
             UUID(document_id)
         except ValueError:
@@ -113,7 +137,7 @@ def get_document_details(document_id: str):
                 detail="Invalid document ID."
             )
 
-        # Get document information
+        # Check both document ID and owner ID
         document = db.execute(
             text("""
                 SELECT
@@ -125,8 +149,12 @@ def get_document_details(document_id: str):
                     created_at
                 FROM documents
                 WHERE id = CAST(:document_id AS UUID)
+                  AND user_id = CAST(:user_id AS UUID)
             """),
-            {"document_id": document_id}
+            {
+                "document_id": document_id,
+                "user_id": str(current_user["id"])
+            }
         ).mappings().first()
 
         if not document:
@@ -135,17 +163,22 @@ def get_document_details(document_id: str):
                 detail="Document not found."
             )
 
-        # Get document chunks
         chunks = db.execute(
             text("""
                 SELECT
-                    chunk_index,
-                    content
-                FROM document_chunks
-                WHERE document_id = CAST(:document_id AS UUID)
-                ORDER BY chunk_index
+                    c.chunk_index,
+                    c.content
+                FROM document_chunks c
+                INNER JOIN documents d
+                    ON d.id = c.document_id
+                WHERE c.document_id = CAST(:document_id AS UUID)
+                  AND d.user_id = CAST(:user_id AS UUID)
+                ORDER BY c.chunk_index
             """),
-            {"document_id": document_id}
+            {
+                "document_id": document_id,
+                "user_id": str(current_user["id"])
+            }
         ).mappings().all()
 
         return {

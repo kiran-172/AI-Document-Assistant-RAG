@@ -6,13 +6,25 @@ import re
 
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    Depends
+)
+
 from sqlalchemy import text
 
 from backend.database import SessionLocal
+from backend.auth import get_current_user
 from backend.document_loader import extract_text_from_pdf
 from backend.text_chunker import split_text_into_chunks
 from backend.embeddings import generate_embedding
+from backend.storage import (
+    upload_pdf_to_storage,
+    delete_pdf_from_storage
+)
 
 
 # --------------------------------------------------
@@ -38,6 +50,8 @@ router = APIRouter(
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Temporary local directory for PDF processing.
+# Original PDFs are stored permanently in Supabase.
 UPLOAD_DIR = PROJECT_ROOT / "documents"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,12 +70,9 @@ def get_safe_original_filename(filename: str | None) -> str:
     """Return a safe original filename for display."""
 
     original = (filename or "document.pdf").replace("\\", "/")
-
     original = original.split("/")[-1]
 
-    # Remove control characters
     original = re.sub(r"[\x00-\x1f\x7f]", "", original)
-
     original = original.strip()
 
     if not original:
@@ -71,11 +82,34 @@ def get_safe_original_filename(filename: str | None) -> str:
 
 
 # --------------------------------------------------
-# PDF Upload API
+# Supabase Cleanup Helper
+# --------------------------------------------------
+
+def cleanup_supabase_file(storage_path: str | None) -> None:
+    """Delete an uploaded Supabase file safely."""
+
+    if not storage_path:
+        return
+
+    try:
+        delete_pdf_from_storage(storage_path)
+
+    except Exception:
+        logger.exception(
+            "Failed to clean up Supabase file: %s",
+            storage_path
+        )
+
+
+# --------------------------------------------------
+# PDF Upload API - Authenticated User
 # --------------------------------------------------
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
 
     original_filename = get_safe_original_filename(file.filename)
 
@@ -91,21 +125,28 @@ async def upload_document(file: UploadFile = File(...)):
             detail="Only PDF files are supported currently."
         )
 
+    # Step 2: Get authenticated user ID
+    user_id = str(current_user["id"])
+
     document_id = str(uuid.uuid4())
 
-    # Generate a unique storage filename
+    # Unique storage filename
     safe_filename = f"{document_id}.pdf"
 
+    # User-specific Supabase storage path
+    storage_path = f"{user_id}/{safe_filename}"
+
+    # Temporary local processing path
     file_path = UPLOAD_DIR / safe_filename
 
     size = 0
-
     db = None
+    storage_uploaded = False
 
     try:
 
         # --------------------------------------------------
-        # Step 2: Save PDF with 20 MB size validation
+        # Step 3: Save PDF temporarily with size validation
         # --------------------------------------------------
 
         with file_path.open("wb") as buffer:
@@ -129,7 +170,7 @@ async def upload_document(file: UploadFile = File(...)):
                 buffer.write(chunk)
 
         # --------------------------------------------------
-        # Step 3: Validate Empty File
+        # Step 4: Validate Empty File
         # --------------------------------------------------
 
         if size == 0:
@@ -140,11 +181,10 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # --------------------------------------------------
-        # Step 4: Validate Actual PDF Content
+        # Step 5: Validate Actual PDF Content
         # --------------------------------------------------
 
         with file_path.open("rb") as uploaded_file:
-
             file_header = uploaded_file.read(1024)
 
         if b"%PDF-" not in file_header:
@@ -155,7 +195,7 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # --------------------------------------------------
-        # Step 5: Extract PDF Text
+        # Step 6: Extract PDF Text
         # --------------------------------------------------
 
         extracted_text = extract_text_from_pdf(str(file_path))
@@ -168,7 +208,7 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # --------------------------------------------------
-        # Step 6: Split Extracted Text into Chunks
+        # Step 7: Split Extracted Text into Chunks
         # --------------------------------------------------
 
         chunks = split_text_into_chunks(
@@ -185,13 +225,47 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # --------------------------------------------------
-        # Step 7: Connect to PostgreSQL Database
+        # Step 8: Generate Embeddings
+        # --------------------------------------------------
+
+        embeddings = []
+
+        for chunk in chunks:
+
+            embedding = generate_embedding(chunk)
+
+            if len(embedding) != EXPECTED_EMBEDDING_DIMENSIONS:
+
+                raise ValueError(
+                    "Unexpected embedding dimensions."
+                )
+
+            embeddings.append(embedding)
+
+        # --------------------------------------------------
+        # Step 9: Upload Original PDF to Supabase Storage
+        # --------------------------------------------------
+
+        pdf_content = file_path.read_bytes()
+
+        upload_pdf_to_storage(
+            storage_path=storage_path,
+            file_content=pdf_content
+        )
+
+        storage_uploaded = True
+
+        # Release PDF bytes from this local variable
+        del pdf_content
+
+        # --------------------------------------------------
+        # Step 10: Connect to PostgreSQL Database
         # --------------------------------------------------
 
         db = SessionLocal()
 
         # --------------------------------------------------
-        # Step 8: Save Document Metadata
+        # Step 11: Save Document Metadata with User Ownership
         # --------------------------------------------------
 
         db.execute(
@@ -200,52 +274,51 @@ async def upload_document(file: UploadFile = File(...)):
                     id,
                     filename,
                     file_path,
+                    storage_path,
                     content_type,
                     file_size,
-                    status
+                    status,
+                    user_id
                 )
                 VALUES (
                     CAST(:document_id AS UUID),
                     :filename,
                     :file_path,
+                    :storage_path,
                     :content_type,
                     :file_size,
-                    :status
+                    :status,
+                    CAST(:user_id AS UUID)
                 )
             """),
             {
                 "document_id": document_id,
                 "filename": original_filename,
-                "file_path": str(file_path),
+                "file_path": storage_path,
+                "storage_path": storage_path,
                 "content_type": "application/pdf",
                 "file_size": size,
-                "status": "processing"
+                "status": "processing",
+                "user_id": user_id
             }
         )
 
         # --------------------------------------------------
-        # Step 9: Generate Embeddings and Save Chunks
+        # Step 12: Save Chunks and Embeddings
         # --------------------------------------------------
 
         for index, chunk in enumerate(chunks):
 
-            embedding = generate_embedding(chunk)
+            embedding = embeddings[index]
 
-            # Validate embedding dimensions
-            if len(embedding) != EXPECTED_EMBEDDING_DIMENSIONS:
-
-                raise ValueError(
-                    "Unexpected embedding dimensions."
-                )
-
-            # Convert embedding into pgvector format
             embedding_string = (
                 "[" + ",".join(str(value) for value in embedding) + "]"
             )
 
             chunk_metadata = json.dumps({
                 "source": safe_filename,
-                "chunk_index": index
+                "chunk_index": index,
+                "user_id": user_id
             })
 
             db.execute(
@@ -275,7 +348,7 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         # --------------------------------------------------
-        # Step 10: Update Document Status
+        # Step 13: Update Document Status
         # --------------------------------------------------
 
         db.execute(
@@ -283,21 +356,28 @@ async def upload_document(file: UploadFile = File(...)):
                 UPDATE documents
                 SET status = :status
                 WHERE id = CAST(:document_id AS UUID)
+                  AND user_id = CAST(:user_id AS UUID)
             """),
             {
                 "status": "processed",
-                "document_id": document_id
+                "document_id": document_id,
+                "user_id": user_id
             }
         )
 
         # --------------------------------------------------
-        # Step 11: Commit Database Transaction
+        # Step 14: Commit Database Transaction
         # --------------------------------------------------
 
         db.commit()
 
+        logger.info(
+            "Document uploaded successfully. Document ID: %s",
+            document_id
+        )
+
         # --------------------------------------------------
-        # Step 12: Return Upload Response
+        # Step 15: Return Upload Response
         # --------------------------------------------------
 
         return {
@@ -305,10 +385,13 @@ async def upload_document(file: UploadFile = File(...)):
             "document_id": document_id,
             "filename": original_filename,
             "stored_filename": safe_filename,
+            "storage_provider": "Supabase",
+            "storage_path": storage_path,
             "file_size": size,
             "total_chunks": len(chunks),
             "embeddings_dimensions": EXPECTED_EMBEDDING_DIMENSIONS,
-            "status": "processed"
+            "status": "processed",
+            "owner_user_id": user_id
         }
 
     # --------------------------------------------------
@@ -320,7 +403,8 @@ async def upload_document(file: UploadFile = File(...)):
         if db is not None:
             db.rollback()
 
-        file_path.unlink(missing_ok=True)
+        if storage_uploaded:
+            cleanup_supabase_file(storage_path)
 
         raise
 
@@ -333,12 +417,13 @@ async def upload_document(file: UploadFile = File(...)):
         if db is not None:
             db.rollback()
 
+        if storage_uploaded:
+            cleanup_supabase_file(storage_path)
+
         logger.exception(
             "Document processing failed. Document ID: %s",
             document_id
         )
-
-        file_path.unlink(missing_ok=True)
 
         raise HTTPException(
             status_code=500,
@@ -353,5 +438,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         if db is not None:
             db.close()
+
+        file_path.unlink(missing_ok=True)
 
         await file.close()

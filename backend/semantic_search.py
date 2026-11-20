@@ -1,5 +1,6 @@
 
 import time
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -10,7 +11,8 @@ from backend.embeddings import generate_query_embedding
 def search_documents(
     question: str,
     top_k: int = 3,
-    document_id: str | None = None
+    document_id: str | None = None,
+    user_id: str | None = None
 ):
 
     if not question or not question.strip():
@@ -18,6 +20,22 @@ def search_documents(
 
     if top_k < 1:
         raise ValueError("top_k must be at least 1.")
+
+    # Validate authenticated user ID
+    if not user_id:
+        raise ValueError("Authenticated user ID is required.")
+
+    try:
+        UUID(user_id)
+    except ValueError:
+        raise ValueError("Invalid user ID.")
+
+    # Validate optional document ID
+    if document_id:
+        try:
+            UUID(document_id)
+        except ValueError:
+            raise ValueError("Invalid document ID.")
 
     # Step 1: Generate query embedding
     embedding_start = time.perf_counter()
@@ -38,7 +56,7 @@ def search_documents(
     db = SessionLocal()
 
     try:
-        # Step 2: Search PostgreSQL
+        # Step 2: Search only the authenticated user's documents
         db_start = time.perf_counter()
 
         result = db.execute(
@@ -56,16 +74,22 @@ def search_documents(
                     ON d.id = c.document_id
                 WHERE
                     c.embedding IS NOT NULL
+
+                    AND d.user_id = CAST(:user_id AS UUID)
+
                     AND (
-                        CAST(:document_id AS uuid) IS NULL
-                        OR c.document_id = CAST(:document_id AS uuid)
+                        CAST(:document_id AS UUID) IS NULL
+                        OR c.document_id = CAST(:document_id AS UUID)
                     )
+
                 ORDER BY
                     c.embedding <=> CAST(:query_embedding AS vector)
+
                 LIMIT :top_k
             """),
             {
                 "query_embedding": embedding_string,
+                "user_id": user_id,
                 "document_id": document_id,
                 "top_k": top_k
             }
@@ -75,7 +99,7 @@ def search_documents(
 
         # Debug: Display retrieved document filenames
         print(
-            "\n[DEBUG] Retrieved document sources:",
+            "\n[DEBUG] Retrieved user-specific document sources:",
             flush=True
         )
 

@@ -36,7 +36,8 @@ GENERATION_MODEL = "gemini-3.5-flash-lite"
 def generate_answer(
     question: str,
     top_k: int = 3,
-    document_id: str | None = None
+    document_id: str | None = None,
+    user_id: str | None = None
 ):
 
     total_start = time.perf_counter()
@@ -45,8 +46,12 @@ def generate_answer(
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
+    # Validate authenticated user
+    if not user_id:
+        raise ValueError("Authenticated user ID is required.")
+
     # --------------------------------------------------
-    # STEP 1: RETRIEVE RELEVANT DOCUMENT CHUNKS
+    # STEP 1: RETRIEVE USER-SPECIFIC DOCUMENT CHUNKS
     # --------------------------------------------------
 
     retrieval_start = time.perf_counter()
@@ -54,7 +59,8 @@ def generate_answer(
     search_results = search_documents(
         question=question,
         top_k=top_k,
-        document_id=document_id
+        document_id=document_id,
+        user_id=user_id
     )
 
     retrieval_time = time.perf_counter() - retrieval_start
@@ -70,7 +76,7 @@ def generate_answer(
             "question": question,
             "answer": (
                 "I could not find relevant information "
-                "in the uploaded documents."
+                "in your uploaded documents."
             ),
             "sources": []
         }
@@ -86,7 +92,6 @@ def generate_answer(
 
         source_content = result["content"].strip()
 
-        # Prepare context for Gemini
         context_parts.append(
             f"""
 Source {index}
@@ -98,13 +103,11 @@ Content:
 """
         )
 
-        # Generate short content preview
         content_preview = source_content[:300]
 
         if len(source_content) > 300:
             content_preview += "..."
 
-        # Prepare advanced source citation
         sources.append({
             "source_id": f"S{index}",
             "filename": result["filename"],
@@ -119,7 +122,7 @@ Content:
     context = "\n\n".join(context_parts)
 
     # --------------------------------------------------
-    # STEP 3: PREPARE IMPROVED RAG PROMPT
+    # STEP 3: PREPARE RAG PROMPT
     # --------------------------------------------------
 
     prompt = f"""
@@ -205,7 +208,7 @@ Provide the answer based strictly on the document context.
     )
 
     # --------------------------------------------------
-    # STEP 6: RETURN ANSWER AND ADVANCED SOURCES
+    # STEP 6: RETURN ANSWER AND SOURCES
     # --------------------------------------------------
 
     return {

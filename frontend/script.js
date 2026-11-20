@@ -14,17 +14,185 @@ let allDocuments = [];
 // ========================================
 
 document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("authYear").textContent = new Date().getFullYear();
+    initializeTheme();
+    initializeAuthentication();
+});
 
-    loadDocuments();
+// ========================================
+// THEME: LIGHT / DARK MODE
+// ========================================
+
+function initializeTheme() {
+    let savedTheme = "light";
+    try {
+        savedTheme = localStorage.getItem("kiranai-theme") || "light";
+    } catch (_) {
+        // Continue with the default theme if browser storage is unavailable.
+    }
+
+    applyTheme(savedTheme);
+
+    // One delegated listener supports the login screen and every workspace page.
+    document.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-theme-toggle]");
+        if (!button) return;
+        const currentTheme = document.documentElement.dataset.theme || "light";
+        const nextTheme = currentTheme === "dark" ? "light" : "dark";
+        applyTheme(nextTheme);
+        try {
+            localStorage.setItem("kiranai-theme", nextTheme);
+        } catch (_) {
+            // Theme still applies for the current page session.
+        }
+    });
+}
+
+function applyTheme(theme) {
+    const selectedTheme = theme === "dark" ? "dark" : "light";
+    document.documentElement.dataset.theme = selectedTheme;
+
+    document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+        const isDark = selectedTheme === "dark";
+        button.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+        button.setAttribute("aria-pressed", String(isDark));
+        const icon = button.querySelector(".theme-toggle-icon");
+        const label = button.querySelector(".theme-toggle-label");
+        if (icon) icon.textContent = isDark ? "☀️" : "🌙";
+        if (label) label.textContent = isDark ? "Light mode" : "Dark mode";
+    });
+}
+
+async function initializeAuthentication() {
+    document.getElementById("showLoginTab").addEventListener("click", () => showAuthForm("login"));
+    document.getElementById("showRegisterTab").addEventListener("click", () => showAuthForm("register"));
+    document.getElementById("loginForm").addEventListener("submit", handleLogin);
+    document.getElementById("registerForm").addEventListener("submit", handleRegister);
+    document.getElementById("logoutBtn").addEventListener("click", handleLogout);
+
+    try {
+        const response = await fetch(`${API_URL}/auth/me`, { credentials: "include" });
+        if (!response.ok) throw new Error("No active session");
+        const result = await response.json();
+        enterWorkspace(result.user);
+    } catch (_) {
+        showAuthentication();
+    }
+}
+
+function showAuthForm(mode) {
+    const login = mode === "login";
+    document.getElementById("loginForm").hidden = !login;
+    document.getElementById("registerForm").hidden = login;
+    document.getElementById("showLoginTab").classList.toggle("active", login);
+    document.getElementById("showRegisterTab").classList.toggle("active", !login);
+    document.getElementById("loginMessage").textContent = "";
+    document.getElementById("registerMessage").textContent = "";
+}
+
+function showAuthentication() {
+    document.getElementById("authScreen").hidden = false;
+    document.getElementById("appLayout").hidden = true;
+    showAuthForm("login");
+}
+
+function enterWorkspace(user) {
+    document.getElementById("authScreen").hidden = true;
+    document.getElementById("appLayout").hidden = false;
+    document.getElementById("accountEmail").textContent = user.email;
+    document.getElementById("accountRole").textContent = user.role;
+    document.getElementById("accountAvatar").textContent = (user.email || "K").charAt(0).toUpperCase();
+
+    const adminLink = document.querySelector('a[href="#monitoring"]');
+    const isAdmin = user.role === "admin";
+    if (adminLink) adminLink.hidden = !isAdmin;
+    const monitoringSection = document.getElementById("monitoring");
+    if (monitoringSection) monitoringSection.hidden = !isAdmin;
 
     initializeDocumentFilters();
-
     initializeMobileNavigation();
+    loadDocuments();
+    if (isAdmin) loadDatabaseMonitoring();
+}
 
-    // Load PostgreSQL database monitoring
-    loadDatabaseMonitoring();
+async function handleLogin(event) {
+    event.preventDefault();
+    const button = document.getElementById("loginSubmit");
+    const message = document.getElementById("loginMessage");
+    button.disabled = true;
+    message.className = "auth-message";
+    message.textContent = "Signing in...";
+    try {
+        const response = await fetch(`${API_URL}/auth/login`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: document.getElementById("loginEmail").value.trim(),
+                password: document.getElementById("loginPassword").value
+            })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Unable to sign in.");
+        enterWorkspace(result.user);
+    } catch (error) {
+        message.textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
 
-});
+async function handleRegister(event) {
+    event.preventDefault();
+    const button = document.getElementById("registerSubmit");
+    const message = document.getElementById("registerMessage");
+    const password = document.getElementById("registerPassword").value;
+    if (password.length < 12) {
+        message.textContent = "Password must contain at least 12 characters.";
+        return;
+    }
+    button.disabled = true;
+    message.className = "auth-message";
+    message.textContent = "Creating your account...";
+    try {
+        const response = await fetch(`${API_URL}/auth/register`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: document.getElementById("registerEmail").value.trim(),
+                password
+            })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Registration failed.");
+        message.className = "auth-message success";
+        message.textContent = "Account created. Please sign in with your new account.";
+        document.getElementById("loginEmail").value = document.getElementById("registerEmail").value.trim();
+        document.getElementById("registerPassword").value = "";
+        setTimeout(() => showAuthForm("login"), 1200);
+    } catch (error) {
+        message.textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function handleLogout() {
+    const button = document.getElementById("logoutBtn");
+    button.disabled = true;
+    try {
+        await fetch(`${API_URL}/auth/logout`, {
+            method: "POST",
+            credentials: "include"
+        });
+    } finally {
+        button.disabled = false;
+        allDocuments = [];
+        showAuthentication();
+    }
+}
+
 
 
 // ========================================
@@ -209,7 +377,8 @@ async function loadDocuments(preferredDocumentId = null) {
 
 
         const response = await fetch(
-            `${API_URL}/documents/list`
+            `${API_URL}/documents/list`,
+            { credentials: "include" }
         );
 
         const result = await response.json();
@@ -393,6 +562,7 @@ async function uploadDocument() {
             `${API_URL}/documents/upload`,
             {
                 method: "POST",
+                credentials: "include",
                 body: formData
             }
         );
@@ -431,7 +601,9 @@ async function uploadDocument() {
 
 
         // Refresh database monitoring after upload
-        await loadDatabaseMonitoring();
+        if (document.getElementById("accountRole").textContent === "admin") {
+            await loadDatabaseMonitoring();
+        }
 
 
         fileInput.value = "";
@@ -467,7 +639,8 @@ async function viewDocumentDetails(documentId) {
     try {
 
         const response = await fetch(
-            `${API_URL}/documents/details/${encodeURIComponent(documentId)}`
+            `${API_URL}/documents/details/${encodeURIComponent(documentId)}`,
+            { credentials: "include" }
         );
 
 
@@ -677,6 +850,7 @@ async function askQuestion() {
             `${API_URL}/documents/ask`,
             {
                 method: "POST",
+                credentials: "include",
 
                 headers: {
                     "Content-Type": "application/json"
@@ -937,7 +1111,8 @@ async function loadDatabaseMonitoring() {
     try {
 
         const response = await fetch(
-            `${API_URL}/monitoring/database`
+            `${API_URL}/monitoring/database`,
+            { credentials: "include" }
         );
 
 

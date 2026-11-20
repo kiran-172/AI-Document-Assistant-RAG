@@ -1,5 +1,5 @@
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from datetime import datetime
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.upload import router as upload_router
 from backend.ask import router as ask_router
 from backend.monitoring import get_database_monitoring
-
+from backend.auth import router as auth_router, require_admin
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -16,6 +16,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.include_router(auth_router)
 
 # Welcome API
 @app.get("/")
@@ -26,7 +27,6 @@ def home():
         "project": "AI Document Assistant"
     }
 
-
 # Health check API
 @app.get("/health")
 def health_check():
@@ -34,7 +34,6 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat()
     }
-
 
 # Application information API
 @app.get("/api/info")
@@ -48,17 +47,16 @@ def application_info():
         "ai_model": "Google Gemini"
     }
 
-
-# Database monitoring API
+# Admin-only Database Monitoring API
 @app.get("/monitoring/database")
-def database_monitoring():
+def database_monitoring(
+    current_admin: dict = Depends(require_admin)
+):
     return get_database_monitoring()
-
 
 # Register document upload router
 app.include_router(upload_router)
 app.include_router(ask_router)
-
 
 # Serve frontend application
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

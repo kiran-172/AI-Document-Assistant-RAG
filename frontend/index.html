@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>DocuMind - AI Document Assistant</title>
+    <title>KiranAI — AI Document Assistant</title>
 
     <link rel="stylesheet" href="style.css">
 
@@ -18,7 +18,62 @@
 
 <body>
 
-<div class="app-layout">
+<!-- KiranAI Authentication -->
+<section id="authScreen" class="auth-screen">
+    <div class="auth-shell">
+        <div class="auth-brand-panel">
+            <img src="assets/kiranai-logo.png" alt="K-AI KiranAI logo" class="auth-logo">
+            <div class="auth-brand-copy">
+                <span class="auth-kicker">AI DOCUMENT ASSISTANT</span>
+                <h1>KiranAI</h1>
+                <p class="auth-tagline">Your Documents. Your Knowledge. Powered by AI.</p>
+                <p class="auth-description">Turn your PDFs into a searchable knowledge workspace. Upload documents, ask questions and explore grounded answers with source references.</p>
+            </div>
+            <div class="auth-tech">POWERED BY GEMINI · FASTAPI · NEON · PGVECTOR</div>
+        </div>
+        <div class="auth-form-panel">
+            <div class="auth-mobile-brand"><img src="assets/kiranai-logo.png" alt="KiranAI logo"><strong>KiranAI</strong></div>
+            <div class="auth-theme-row">
+                <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark mode" title="Switch theme">
+                    <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
+                    <span class="theme-toggle-label">Dark mode</span>
+                </button>
+            </div>
+            <div class="auth-tabs" role="tablist" aria-label="Authentication">
+                <button type="button" id="showLoginTab" class="auth-tab active">Sign in</button>
+                <button type="button" id="showRegisterTab" class="auth-tab">Create account</button>
+            </div>
+            <form id="loginForm" class="auth-form">
+                <span class="auth-kicker">WELCOME BACK</span>
+                <h2>Sign in to KiranAI</h2>
+                <p class="auth-subtitle">Access your personal document workspace.</p>
+                <label for="loginEmail">Email address</label>
+                <input id="loginEmail" type="email" autocomplete="email" placeholder="you@example.com" required>
+                <label for="loginPassword">Password</label>
+                <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+                <button type="submit" class="auth-submit" id="loginSubmit">Sign in</button>
+                <p id="loginMessage" class="auth-message" aria-live="polite"></p>
+                <small>Use the email and password registered with your KiranAI account.</small>
+            </form>
+            <form id="registerForm" class="auth-form" hidden>
+                <span class="auth-kicker">GET STARTED</span>
+                <h2>Create your account</h2>
+                <p class="auth-subtitle">Your documents stay separated from other users.</p>
+                <label for="registerEmail">Email address</label>
+                <input id="registerEmail" type="email" autocomplete="email" placeholder="you@example.com" required>
+                <label for="registerPassword">Password</label>
+                <input id="registerPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" placeholder="At least 12 characters" required>
+                <small class="password-hint">Use at least 12 characters.</small>
+                <button type="submit" class="auth-submit" id="registerSubmit">Create account</button>
+                <p id="registerMessage" class="auth-message" aria-live="polite"></p>
+                <small>Registration creates a standard user account. Admin access is assigned separately.</small>
+            </form>
+            <div class="auth-footer">© <span id="authYear"></span> KiranAI. Your knowledge, organized.</div>
+        </div>
+    </div>
+</section>
+
+<div class="app-layout" id="appLayout" hidden>
 
     <!-- Mobile overlay -->
     <div id="sidebarOverlay" class="sidebar-overlay"></div>
@@ -27,11 +82,10 @@
     <aside class="sidebar" id="sidebar">
 
         <a href="#dashboard" class="brand">
-            <div class="brand-icon">✦</div>
-
+            <img src="assets/kiranai-logo.png" alt="KiranAI" class="sidebar-brand-logo">
             <div class="brand-text">
-                <strong>DocuMind</strong>
-                <span>AI WORKSPACE</span>
+                <strong>KiranAI</strong>
+                <span>AI DOCUMENT ASSISTANT</span>
             </div>
         </a>
 
@@ -62,7 +116,7 @@
             <!-- NEW: Database Monitoring -->
             <a href="#monitoring" class="nav-item">
                 <span class="nav-icon">▣</span>
-                <span>Database Monitoring</span>
+                <span>Admin · Database Monitoring</span>
             </a>
 
         </nav>
@@ -125,12 +179,21 @@
 
             <div class="topbar-right">
 
+                <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark mode" title="Switch theme">
+                    <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
+                    <span class="theme-toggle-label">Dark mode</span>
+                </button>
+
                 <div class="system-status">
                     <span class="online-dot"></span>
                     System ready
                 </div>
 
-                <div class="profile-avatar">AI</div>
+                <div class="account-control">
+                    <div class="account-avatar" id="accountAvatar">K</div>
+                    <div class="account-meta"><strong id="accountEmail">Account</strong><small id="accountRole">User</small></div>
+                    <button type="button" id="logoutBtn" class="logout-btn">Log out</button>
+                </div>
 
             </div>
 
@@ -794,7 +857,7 @@
             <!-- Footer -->
             <footer>
 
-                <span>✦ DocuMind AI</span>
+                <span>KiranAI</span>
 
                 <span>
                     Powered by Gemini · FastAPI · PostgreSQL · pgvector
