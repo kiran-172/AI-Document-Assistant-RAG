@@ -22,3 +22,4 @@ langchain-text-splitters
 # Authentication and security
 pwdlib[argon2]
 email-validator
+supabase
